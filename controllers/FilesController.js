@@ -1,11 +1,13 @@
 import { v4 as uuidv4 } from 'uuid';
 import { promises as fs } from 'fs';
 import { ObjectID } from 'mongodb';
+import mongoDBCore from 'mongodb/lib/core';
 import Queue from 'bull';
 import redisClient from '../utils/redis';
 import dbClient from '../utils/db';
 
 const fileQueue = new Queue('fileQueue', 'redis://127.0.0.1:6379');
+const ROOT_FOLDER_ID = 0;
 
 class FilesController {
   static async getUser(request) {
@@ -186,22 +188,32 @@ class FilesController {
   }
 
   static async putPublish(request, response) {
-    const user = await FilesController.getUser(request);
-    if (!user) {
-      return response.status(401).json({ error: 'Unauthorized' });
+    const { user } = req;
+    const { id } = req.params;
+    const userId = user._id.toString();
+    const fileFilter = {
+      _id: new mongoDBCore.BSON.ObjectId(isValidId(id) ? id : NULL_ID),
+      userId: new mongoDBCore.BSON.ObjectId(isValidId(userId) ? userId : NULL_ID),
+    };
+    const file = await (await dbClient.filesCollection())
+      .findOne(fileFilter);
+
+    if (!file) {
+      res.status(404).json({ error: 'Not found' });
+      return;
     }
-    const { id } = request.params;
-    const files = dbClient.db.collection('files');
-    const idObject = new ObjectID(id);
-    const newValue = { $set: { isPublic: true } };
-    const options = { returnOriginal: false };
-    files.findOneAndUpdate({ _id: idObject, userId: user._id }, newValue, options, (err, file) => {
-      if (!file.lastErrorObject.updatedExisting) {
-        return response.status(404).json({ error: 'Not found' });
-      }
-      return response.status(200).json(file.value);
+    await (await dbClient.filesCollection())
+      .updateOne(fileFilter, { $set: { isPublic: true } });
+    res.status(200).json({
+      id,
+      userId,
+      name: file.name,
+      type: file.type,
+      isPublic: true,
+      parentId: file.parentId === ROOT_FOLDER_ID.toString()
+        ? 0
+        : file.parentId.toString(),
     });
-    return null;
   }
 
   static async putUnpublish(request, response) {
